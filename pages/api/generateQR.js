@@ -1,9 +1,13 @@
-// API route for instructors to generate session QR codes.
-// Role-based authentication: Only users with 'instructor' role can access this endpoint.
+// API route for instructors to generate signed session QR codes (JWT protected).
 import { v4 as uuidv4 } from "uuid";
 import QRCode from "qrcode";
 import db from "../../lib/db";
 import { createQRPayload } from "../../lib/qr";
+import { authenticateRequest } from "../../lib/apiAuth";
+import { validateBody } from "../../lib/validateRequest";
+import { generateQRSchema } from "../../lib/schemas";
+import { rateLimit, getRateLimitKey } from "../../lib/rateLimit";
+import { logAudit } from "../../lib/audit";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -11,39 +15,68 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { user_id, course_id } = req.body;
-
-    if (!user_id) {
-      return res.status(400).json({ message: "Authenticated user is required" });
+    const auth = await authenticateRequest(req, ["instructor"]);
+    if (auth.error) {
+      return res.status(auth.error.status).json({ message: auth.error.message });
     }
 
-    // Role-based authentication: Only database instructor role is allowed.
-    const [users] = await db.execute("SELECT id, role FROM students WHERE id = ?", [user_id]);
-    if (users.length === 0) {
-      return res.status(404).json({ message: "User not found" });
+    const rl = await rateLimit(req, {
+      key: getRateLimitKey(req, "generateQR", auth.user.id),
+      max: 30,
+      windowMs: 60 * 1000
+    });
+    if (rl.limited) {
+      return res.status(429).json({ message: "Too many QR generation requests" });
     }
 
-    if (users[0].role !== "instructor") {
-      return res.status(403).json({ message: "Only instructor can generate QR" });
+    const parsed = validateBody(req.body, generateQRSchema);
+    if (parsed.error) {
+      return res.status(parsed.error.status).json(parsed.error);
     }
+
+    const courseCode = parsed.data.course_id || "CSE101";
+
+    const [courses] = await db.execute(
+      "SELECT course_code FROM courses WHERE course_code = ? AND instructor_id = ?",
+      [courseCode, auth.user.id]
+    );
+
+    if (courses.length === 0) {
+      return res.status(403).json({ message: "You are not assigned to this course" });
+    }
+
+    // Deactivate previous active sessions for this course.
+    await db.execute(
+      "UPDATE sessions SET is_active = 0 WHERE course_id = ? AND is_active = 1",
+      [courseCode]
+    );
 
     const sessionId = uuidv4();
-    const courseId = course_id || "default-course";
-
-    await db.execute("INSERT INTO sessions (session_id, course_id) VALUES (?, ?)", [
-      sessionId,
-      courseId
-    ]);
+    await db.execute(
+      "INSERT INTO sessions (session_id, course_id, is_active) VALUES (?, ?, 1)",
+      [sessionId, courseCode]
+    );
 
     const payload = createQRPayload(sessionId);
     const qrImage = await QRCode.toDataURL(JSON.stringify(payload));
 
+    await logAudit({
+      req,
+      userId: auth.user.id,
+      action: "qr_generated",
+      resource: sessionId,
+      status: "success",
+      metadata: { course_id: courseCode }
+    });
+
     return res.status(200).json({
       message: "QR generated successfully",
       qrImage,
-      session: payload
+      session: payload,
+      course_id: courseCode
     });
   } catch (error) {
+    console.error("GenerateQR error:", error);
     return res.status(500).json({ message: "Server error while generating QR" });
   }
 }

@@ -1,121 +1,124 @@
 "use client";
 
-// Instructor dashboard for generating and refreshing session QR codes.
-// Role-based authentication: Only instructors can access this page.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import QRDisplay from "../../../components/QRDisplay";
+import PageShell, { FooterLink } from "../../../components/PageShell";
+import { logoutSession, getAuthHeaders } from "../../../lib/clientAuth";
+
+function readUserFromStorage() {
+  if (typeof window === "undefined") return null;
+  try {
+    return JSON.parse(localStorage.getItem("user") || "null");
+  } catch {
+    return null;
+  }
+}
 
 export default function InstructorDashboardPage() {
   const [qrImage, setQrImage] = useState("");
   const [session, setSession] = useState(null);
   const [message, setMessage] = useState("");
   const [isError, setIsError] = useState(false);
-  const [countdown, setCountdown] = useState(30);
+  const [countdown, setCountdown] = useState(0);
+  const [courses, setCourses] = useState([]);
+  const [selectedCourse, setSelectedCourse] = useState("CSE101");
   const router = useRouter();
-
-  const user = useMemo(() => {
-    if (typeof window === "undefined") {
-      return null;
-    }
-    try {
-      return JSON.parse(localStorage.getItem("user") || "null");
-    } catch (error) {
-      return null;
-    }
-  }, []);
-
-  const handleLogout = () => {
-    if (typeof window !== "undefined") {
-      localStorage.removeItem("user");
-      router.push("/");
-    }
-  };
+  const user = useMemo(() => readUserFromStorage(), []);
 
   useEffect(() => {
-    // Instructor page access: allow if user session is instructor
-    const user = JSON.parse(localStorage.getItem("user") || "{}");
-    if (!user?.id || (user?.role !== "instructor" && user?.sessionRole !== "instructor")) {
+    const activeUser = readUserFromStorage();
+    if (!activeUser?.id || activeUser?.role !== "instructor") {
       router.push("/instructor/login");
       return;
     }
+    fetch("/api/courses", { headers: getAuthHeaders() })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.courses?.length) {
+          setCourses(data.courses);
+          setSelectedCourse(data.courses[0].course_code);
+        }
+      });
   }, [router]);
 
   const generateQR = useCallback(async () => {
     try {
-      // Role-based authentication: Verify instructor role before API call
-      const user = JSON.parse(localStorage.getItem("user") || "{}");
-      if (!user?.id || (user?.role !== "instructor" && user?.sessionRole !== "instructor")) {
-        setIsError(true);
-        setMessage("Access denied. Instructor login required.");
-        router.push("/instructor/login");
-        return;
-      }
-
       const response = await fetch("/api/generateQR", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_id: user.id,
-          course_id: "CSE101"
-        })
+        headers: getAuthHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ course_id: selectedCourse })
       });
-
       const data = await response.json();
       setIsError(!response.ok);
       setMessage(data.message);
-
       if (response.ok) {
         setQrImage(data.qrImage);
         setSession(data.session);
         setCountdown(30);
+        setIsError(false);
+        setMessage("QR generated successfully");
       }
-    } catch (error) {
+    } catch {
       setIsError(true);
       setMessage("Could not generate QR.");
     }
-  }, [router]);
+  }, [selectedCourse]);
 
   useEffect(() => {
-    generateQR();
-    const interval = setInterval(generateQR, 30 * 1000);
-    return () => clearInterval(interval);
-  }, [generateQR]);
-
-  useEffect(() => {
+    if (!qrImage || countdown <= 0) return undefined;
     const timer = setInterval(() => {
-      setCountdown((prev) => (prev <= 1 ? 30 : prev - 1));
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          setQrImage("");
+          setSession(null);
+          setIsError(true);
+          setMessage("QR code expired");
+          return 0;
+        }
+        return prev - 1;
+      });
     }, 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [qrImage, countdown]);
 
   return (
-    <main className="container">
-      <h1>Instructor Dashboard</h1>
-      <p>Welcome to the QR Attendance System</p>
-      {user?.name && (
-        <p style={{ marginBottom: "1rem", color: "#333" }}>
-          Logged in as <strong>{user.name}</strong> ({user.sessionRole === "instructor" ? "Instructor session" : user.role})
-        </p>
-      )}
+    <PageShell
+      title="Instructor Dashboard"
+      subtitle="Generate secure attendance QR codes for your active class session."
+      badge="Live Session"
+      badgeClass="badge-instructor"
+      wide
+      footer={
+        <>
+          <button type="button" className="btn-danger" onClick={async () => { await logoutSession(); router.push("/"); }}>Logout</button>
+          <FooterLink href="/">Back to home</FooterLink>
+        </>
+      }
+    >
+      {user?.name && <div className="user-chip">Logged in as <strong>{user.name}</strong></div>}
 
-      <div className="stack">
-        <button onClick={generateQR}>Generate New QR Code</button>
-        <p>Auto refresh in: {countdown}s</p>
+      <div className="card stack">
+        <label>
+          Select Course
+          <select value={selectedCourse} onChange={(e) => setSelectedCourse(e.target.value)}>
+            {courses.length === 0 ? (
+              <option value="CSE101">CSE101</option>
+            ) : (
+              courses.map((course) => (
+                <option key={course.id} value={course.course_code}>
+                  {course.course_code} - {course.course_name}
+                </option>
+              ))
+            )}
+          </select>
+        </label>
+        <button type="button" className="btn-primary" onClick={generateQR}>Generate New QR Code</button>
+        {qrImage ? <span className="timer-pill">Expires in {countdown}s</span> : <span className="muted">No active QR</span>}
         <QRDisplay qrImage={qrImage} session={session} />
       </div>
 
-      {message && (
-        <div className={`message ${isError ? "error" : "success"}`}>
-          {message}
-        </div>
-      )}
-
-      <div className="stack" style={{ marginTop: "2rem" }}>
-        <button onClick={handleLogout} className="btn secondary">Logout</button>
-        <a href="/instructor/login" className="btn secondary">← Back to Login</a>
-        <a href="/" className="btn secondary">← Home</a>
-      </div>
-    </main>
+      {message && <div className={`message ${isError ? "error" : "success"}`}>{message}</div>}
+    </PageShell>
   );
 }

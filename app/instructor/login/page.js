@@ -1,8 +1,9 @@
 "use client";
 
-// Instructor login page - separate from student login for role-based authentication.
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { saveAuthSession } from "../../../lib/clientAuth";
+import PageShell, { FooterLink } from "../../../components/PageShell";
 
 export default function InstructorLoginPage() {
   const [formData, setFormData] = useState({ email: "", password: "" });
@@ -11,40 +12,27 @@ export default function InstructorLoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
 
-  const handleChange = (event) => {
-    setFormData((prev) => ({ ...prev, [event.target.name]: event.target.value }));
-  };
-
   const handleSubmit = async (event) => {
     event.preventDefault();
-    setMessage("");
     setIsLoading(true);
+    setMessage("");
 
     try {
-      const payload = {
-        ...formData,
-        role: "instructor",
-        loginType: "instructor", // Allow any registered user to authenticate here
-        device_id: navigator.userAgent
-      };
-
       const response = await fetch("/api/login", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({
+          ...formData,
+          loginType: "instructor",
+          device_id: navigator.userAgent
+        })
       });
-
       const data = await response.json();
       setIsError(!data.success);
       setMessage(data.message || "Login failed");
-
       if (data.success) {
-        const userSession = {
-          ...data.user,
-          sessionRole: data.sessionRole || "instructor"
-        };
-        // Treat this session as instructor access
-        localStorage.setItem("user", JSON.stringify(userSession));
+        saveAuthSession(data);
         router.push("/instructor/dashboard");
       }
     } catch (error) {
@@ -56,44 +44,20 @@ export default function InstructorLoginPage() {
   };
 
   return (
-    <main className="container">
-      <h1>Instructor Login</h1>
-      <p>Login to access the instructor dashboard</p>
-
+    <PageShell
+      title="Instructor Login"
+      subtitle="Access dashboard and generate class QR sessions."
+      badge="Instructor Portal"
+      badgeClass="badge-instructor"
+      footer={<FooterLink href="/">Back to home</FooterLink>}
+    >
       <form className="stack" onSubmit={handleSubmit}>
-        <input
-          name="email"
-          type="email"
-          placeholder="Instructor Email"
-          onChange={handleChange}
-          required
-          disabled={isLoading}
-        />
-        <input
-          name="password"
-          type="password"
-          placeholder="Password"
-          onChange={handleChange}
-          required
-          disabled={isLoading}
-        />
-        <button type="submit" disabled={isLoading}>
-          {isLoading ? "Logging in..." : "Login as Instructor"}
-        </button>
+        <label>Email<input name="email" type="email" placeholder="instructor@college.com" onChange={(e) => setFormData((p) => ({ ...p, email: e.target.value }))} required disabled={isLoading} /></label>
+        <label>Password<input name="password" type="password" placeholder="Password" onChange={(e) => setFormData((p) => ({ ...p, password: e.target.value }))} required disabled={isLoading} /></label>
+        <button type="submit" className="btn-primary" disabled={isLoading}>{isLoading ? "Logging in..." : "Login"}</button>
       </form>
-
-      {message && (
-        <div className={`message ${isError ? "error" : "success"}`}>
-          {message}
-        </div>
-      )}
-
-      <div className="stack" style={{ marginTop: "2rem" }}>
-        <a href="/" className="btn secondary">← Back to Home</a>
-        <p style={{ fontSize: "0.9rem", color: "#666" }}>
-          Don't have an instructor account? Contact your administrator.
-        </p>
-      </div>
-    </main>
+      {message && <div className={`message ${isError ? "error" : "success"}`}>{message}</div>}
+      <p className="muted">Instructor accounts are created by admin.</p>
+    </PageShell>
   );
 }

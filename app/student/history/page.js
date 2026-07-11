@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import PageShell, { FooterLink } from "../../../components/PageShell";
+import { logoutSession, getAuthHeaders } from "../../../lib/clientAuth";
 
 export default function StudentHistoryPage() {
   const [records, setRecords] = useState([]);
@@ -9,14 +11,10 @@ export default function StudentHistoryPage() {
   const [isError, setIsError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
-
   const user = useMemo(() => {
-    if (typeof window === "undefined") {
-      return null;
-    }
     try {
       return JSON.parse(localStorage.getItem("user") || "null");
-    } catch (error) {
+    } catch {
       return null;
     }
   }, []);
@@ -26,96 +24,70 @@ export default function StudentHistoryPage() {
       router.push("/student/login");
       return;
     }
-
-    const fetchHistory = async () => {
-      try {
-        const response = await fetch(`/api/attendanceHistory?student_id=${user.id}`);
-        const data = await response.json();
-        if (!response.ok) {
+    fetch("/api/attendanceHistory", { headers: getAuthHeaders() })
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data.attendance) {
           setIsError(true);
-          setMessage(data.message || "Could not load attendance history.");
+          setMessage(data.message || "Could not load history");
           return;
         }
-        setRecords(data.attendance || []);
-      } catch (error) {
+        setRecords(data.attendance);
+      })
+      .catch(() => {
         setIsError(true);
-        setMessage("Unable to load attendance history.");
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchHistory();
+        setMessage("Unable to load attendance history");
+      })
+      .finally(() => setIsLoading(false));
   }, [router, user]);
 
-  const handleLogout = () => {
-    if (typeof window !== "undefined") {
-      localStorage.removeItem("user");
-      router.push("/");
-    }
-  };
-
   return (
-    <main className="container">
-      <h1>Attendance History</h1>
-      <p>Review your attendance records for past sessions.</p>
-
-      {user?.name && (
-        <p style={{ marginBottom: "1rem", color: "#333" }}>
-          Logged in as <strong>{user.name}</strong>
-        </p>
-      )}
+    <PageShell
+      title="Attendance History"
+      subtitle="Track your previous session attendance records."
+      badge="Student Records"
+      badgeClass="badge-student"
+      wide
+      footer={
+        <>
+          <button type="button" className="btn-danger" onClick={async () => { await logoutSession(); router.push("/"); }}>Logout</button>
+          <FooterLink href="/student/scan">Back to scanner</FooterLink>
+          <FooterLink href="/">Home</FooterLink>
+        </>
+      }
+    >
+      {user?.name && <div className="user-chip">Student: <strong>{user.name}</strong></div>}
 
       {isLoading ? (
-        <p>Loading attendance history...</p>
+        <p className="muted">Loading attendance history...</p>
+      ) : records.length === 0 ? (
+        <div className="card"><p className="muted">No attendance records yet.</p></div>
       ) : (
-        <div className="stack">
-          {records.length === 0 ? (
-            <p>No attendance records found yet.</p>
-          ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr>
-                  <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #ddd" }}>Course</th>
-                  <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #ddd" }}>Session</th>
-                  <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #ddd" }}>Status</th>
-                  <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #ddd" }}>Date</th>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Course</th>
+                <th>Session</th>
+                <th>Status</th>
+                <th>Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              {records.map((record) => (
+                <tr key={`${record.session_id}-${record.date}`}>
+                  <td>{record.course_id || "N/A"}</td>
+                  <td>{String(record.session_id).slice(0, 10)}...</td>
+                  <td>{record.status}</td>
+                  <td>{new Date(record.date).toLocaleString()}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {records.map((record) => (
-                  <tr key={`${record.session_id}-${record.date}`}>
-                    <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
-                      {record.course_id || "Unknown"}
-                    </td>
-                    <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
-                      {record.session_id}
-                    </td>
-                    <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
-                      {record.status}
-                    </td>
-                    <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
-                      {new Date(record.date).toLocaleString()}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
-      {message && (
-        <div className={`message ${isError ? "error" : "success"}`}>
-          {message}
-        </div>
-      )}
-
-      <div className="stack" style={{ marginTop: "2rem" }}>
-        <button onClick={handleLogout} className="btn secondary">Logout</button>
-        <a href="/student/scan" className="btn secondary">← Back to Scanner</a>
-        <a href="/" className="btn secondary">← Home</a>
-      </div>
-    </main>
+      {message && <div className={`message ${isError ? "error" : "success"}`}>{message}</div>}
+    </PageShell>
   );
 }

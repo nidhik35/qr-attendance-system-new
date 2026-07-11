@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata = {
   title: "Secure QR Attendance",
-  description: "QR code based attendance system"
+  description: "Modern QR attendance system with secure role-based access"
 };
 
 export default function RootLayout({ children }) {

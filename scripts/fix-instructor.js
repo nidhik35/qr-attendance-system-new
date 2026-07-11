@@ -43,6 +43,20 @@ async function run() {
     ["Instructor", "instructor@gmail.com", hash, "instructor"]
   );
 
+  const [rows] = await conn.execute(
+    "SELECT id FROM students WHERE email = 'instructor@gmail.com' LIMIT 1"
+  );
+  if (rows.length > 0) {
+    const instructorId = rows[0].id;
+    const lat = process.env.CLASSROOM_LAT || "12.9141";
+    const lng = process.env.CLASSROOM_LNG || "74.8560";
+    await conn.execute(
+      `INSERT IGNORE INTO courses (course_code, course_name, instructor_id, classroom_lat, classroom_lng, radius_meters)
+       VALUES ('CSE101', 'Computer Networks', ?, ?, ?, 50)`,
+      [instructorId, lat, lng]
+    );
+  }
+
   await conn.end();
   console.log("Instructor account created/updated successfully with role-based authentication.");
 }

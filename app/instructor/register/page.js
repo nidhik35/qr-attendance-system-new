@@ -1,8 +1,8 @@
 "use client";
 
-// Instructor registration page - separate from student registration.
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import PageShell, { FooterLink } from "../../../components/PageShell";
 
 export default function InstructorRegisterPage() {
   const [formData, setFormData] = useState({ name: "", email: "", password: "" });
@@ -32,11 +32,9 @@ export default function InstructorRegisterPage() {
       setMessage(data.message);
 
       if (response.ok) {
-        setTimeout(() => {
-          router.push("/instructor/login");
-        }, 2000);
+        setTimeout(() => router.push("/instructor/login"), 2000);
       }
-    } catch (error) {
+    } catch {
       setIsError(true);
       setMessage("Registration failed. Please try again.");
     } finally {
@@ -45,49 +43,37 @@ export default function InstructorRegisterPage() {
   };
 
   return (
-    <main className="container">
-      <h1>Instructor Registration</h1>
-      <p>Create your instructor account</p>
-
+    <PageShell
+      title="Instructor Registration"
+      subtitle="Create an instructor account to generate session QR codes."
+      badge="Instructor Portal"
+      badgeClass="badge-instructor"
+      footer={
+        <>
+          <FooterLink href="/instructor/login">Already have an account? Login</FooterLink>
+          <FooterLink href="/">Back to home</FooterLink>
+        </>
+      }
+    >
       <form className="stack" onSubmit={handleSubmit}>
-        <input
-          name="name"
-          placeholder="Full Name"
-          onChange={handleChange}
-          required
-          disabled={isLoading}
-        />
-        <input
-          name="email"
-          type="email"
-          placeholder="Email Address"
-          onChange={handleChange}
-          required
-          disabled={isLoading}
-        />
-        <input
-          name="password"
-          type="password"
-          placeholder="Password"
-          onChange={handleChange}
-          required
-          disabled={isLoading}
-        />
-        <button type="submit" disabled={isLoading}>
-          {isLoading ? "Creating Account..." : "Register as Instructor"}
+        <label>
+          Full name
+          <input name="name" placeholder="Jane Doe" onChange={handleChange} required disabled={isLoading} />
+        </label>
+        <label>
+          Email
+          <input name="email" type="email" placeholder="instructor@college.com" onChange={handleChange} required disabled={isLoading} />
+        </label>
+        <label>
+          Password
+          <input name="password" type="password" placeholder="Strong password" onChange={handleChange} required disabled={isLoading} />
+        </label>
+        <button type="submit" className="btn-primary" disabled={isLoading}>
+          {isLoading ? "Creating account..." : "Register as instructor"}
         </button>
       </form>
 
-      {message && (
-        <div className={`message ${isError ? "error" : "success"}`}>
-          {message}
-        </div>
-      )}
-
-      <div className="stack" style={{ marginTop: "2rem" }}>
-        <a href="/instructor/login" className="btn secondary">Already have an account? Login</a>
-        <a href="/" className="btn secondary">← Back to Home</a>
-      </div>
-    </main>
+      {message && <div className={`message ${isError ? "error" : "success"}`}>{message}</div>}
+    </PageShell>
   );
 }

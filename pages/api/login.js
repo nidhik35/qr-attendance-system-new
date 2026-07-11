@@ -1,46 +1,54 @@
-// API route for role-based login with device binding.
-// Role-based authentication: Validates user credentials and role before allowing access.
-// Accepts role parameter to ensure user is logging in with correct role.
+// API route for role-based login with device binding and JWT token pair.
 import db from "../../lib/db";
 import { comparePassword } from "../../lib/auth";
 import { getDeviceId } from "../../lib/device";
+import { getClientIp } from "../../lib/apiAuth";
+import { issueTokenPair, setRefreshCookie } from "../../lib/refreshToken";
+import { validateBody } from "../../lib/validateRequest";
+import { loginSchema } from "../../lib/schemas";
+import { rateLimit, getRateLimitKey } from "../../lib/rateLimit";
+import { logAudit } from "../../lib/audit";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
   }
 
-  try {
-    const { email, password, role, device_id, loginType } = req.body;
-    const isInstructorLogin = loginType === "instructor";
+  const rl = await rateLimit(req, {
+    key: getRateLimitKey(req, "login"),
+    max: 10,
+    windowMs: 60 * 1000
+  });
+  if (rl.limited) {
+    return res.status(429).json({ message: "Too many login attempts. Try again shortly." });
+  }
 
-    // Validate required fields
-    if (!email || !password || !device_id) {
+  try {
+    const parsed = validateBody(req.body, loginSchema);
+    if (parsed.error) {
+      return res.status(parsed.error.status).json({ success: false, message: parsed.error.message, details: parsed.error.details });
+    }
+
+    const { email, password, role, device_id, loginType } = parsed.data;
+    const isInstructorLogin = loginType === "instructor";
+    const isAdminLogin = loginType === "admin";
+
+    if (!isInstructorLogin && !isAdminLogin && !role) {
       return res.status(400).json({
         success: false,
-        message: "Email, password, and device_id are required"
+        message: "Login role is required for student login"
       });
     }
 
-    if (!isInstructorLogin) {
-      if (!role) {
-        return res.status(400).json({
-          success: false,
-          message: "Login role is required for student login"
-        });
-      }
-      if (!['student', 'instructor'].includes(role)) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid role. Must be 'student' or 'instructor'"
-        });
-      }
-    }
-
-    // Find user by email. Instructor login accepts any registered user.
-    let query = "SELECT id, name, email, password_hash, device_id, role FROM students WHERE email = ?";
+    let query =
+      "SELECT id, name, email, password_hash, device_id, role, token_version FROM students WHERE email = ?";
     const params = [email];
-    if (!isInstructorLogin) {
+
+    if (isAdminLogin) {
+      query += " AND role = 'admin'";
+    } else if (isInstructorLogin) {
+      query += " AND role = 'instructor'";
+    } else {
       query += " AND role = ?";
       params.push(role);
     }
@@ -48,6 +56,7 @@ export default async function handler(req, res) {
     const [rows] = await db.execute(query, params);
 
     if (rows.length === 0) {
+      await logAudit({ req, action: "login", status: "failed", metadata: { email, reason: "not_found" } });
       return res.status(401).json({
         success: false,
         message: "Invalid credentials or role mismatch"
@@ -55,44 +64,63 @@ export default async function handler(req, res) {
     }
 
     const user = rows[0];
-
-    // Verify password
     const isValidPassword = await comparePassword(password, user.password_hash);
     if (!isValidPassword) {
+      await logAudit({ req, userId: user.id, action: "login", status: "failed", metadata: { reason: "bad_password" } });
       return res.status(401).json({
         success: false,
         message: "Invalid credentials"
       });
     }
 
-    // Handle device binding
-    const normalizedDeviceId = getDeviceId(device_id);
+    const safeDeviceId = device_id || "unknown-device";
+    const normalizedDeviceId = getDeviceId(safeDeviceId);
     if (!user.device_id) {
-      // First login - bind device
       await db.execute("UPDATE students SET device_id = ? WHERE id = ?", [
         normalizedDeviceId,
         user.id
       ]);
     } else if (user.device_id !== normalizedDeviceId) {
+      await logAudit({
+        req,
+        userId: user.id,
+        action: "login",
+        status: "flagged",
+        metadata: { reason: "device_mismatch" }
+      });
       return res.status(403).json({
         success: false,
         message: "Device mismatch. Login rejected."
       });
     }
 
-    const sessionRole = isInstructorLogin ? "instructor" : user.role;
+    const clientIp = getClientIp(req);
+    await db.execute("UPDATE students SET last_login_ip = ? WHERE id = ?", [clientIp, user.id]);
 
-    // Return success with user data and session role info
+    const userPayload = {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      token_version: user.token_version ?? 0
+    };
+
+    const tokens = await issueTokenPair(userPayload, normalizedDeviceId);
+    setRefreshCookie(res, tokens.refreshToken);
+
+    await logAudit({ req, userId: user.id, action: "login", status: "success", metadata: { role: user.role } });
+
     return res.status(200).json({
       success: true,
+      message: "Login successful",
+      accessToken: tokens.accessToken,
       userId: user.id,
       role: user.role,
-      sessionRole,
       user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role
+        id: userPayload.id,
+        name: userPayload.name,
+        email: userPayload.email,
+        role: userPayload.role
       }
     });
   } catch (error) {

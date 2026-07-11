@@ -1,8 +1,9 @@
 "use client";
 
-// Student login page - separate from instructor login for role-based authentication.
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { saveAuthSession } from "../../../lib/clientAuth";
+import PageShell, { FooterLink } from "../../../components/PageShell";
 
 export default function StudentLoginPage() {
   const [formData, setFormData] = useState({ email: "", password: "" });
@@ -11,26 +12,21 @@ export default function StudentLoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
 
-  const handleChange = (event) => {
-    setFormData((prev) => ({ ...prev, [event.target.name]: event.target.value }));
-  };
-
   const handleSubmit = async (event) => {
     event.preventDefault();
     setMessage("");
     setIsLoading(true);
 
     try {
-      const payload = {
-        ...formData,
-        role: "student", // Explicitly set role for student login
-        device_id: navigator.userAgent
-      };
-
       const response = await fetch("/api/login", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({
+          ...formData,
+          role: "student",
+          device_id: navigator.userAgent || "mobile-device"
+        })
       });
 
       const data = await response.json();
@@ -38,10 +34,15 @@ export default function StudentLoginPage() {
       setMessage(data.message || "Login failed");
 
       if (data.success) {
-        // Store user data in localStorage
-        localStorage.setItem("user", JSON.stringify(data.user));
-        // Redirect to student scan page
-        router.push("/student/scan");
+        saveAuthSession(data);
+        const faceStatus = await fetch("/api/face/status", {
+          headers: {
+            Authorization: `Bearer ${data.accessToken}`,
+            "Content-Type": "application/json"
+          }
+        });
+        const faceData = await faceStatus.json();
+        router.push(faceStatus.ok && !faceData.hasFace ? "/student/face-setup" : "/student/scan");
       }
     } catch (error) {
       setIsError(true);
@@ -52,42 +53,32 @@ export default function StudentLoginPage() {
   };
 
   return (
-    <main className="container">
-      <h1>Student Login</h1>
-      <p>Login to access the QR scanner</p>
-
+    <PageShell
+      title="Student Login"
+      subtitle="Sign in to scan attendance QR codes."
+      badge="Student Portal"
+      badgeClass="badge-student"
+      footer={
+        <>
+          <FooterLink href="/student/register">Create account</FooterLink>
+          <FooterLink href="/">Back to home</FooterLink>
+        </>
+      }
+    >
       <form className="stack" onSubmit={handleSubmit}>
-        <input
-          name="email"
-          type="email"
-          placeholder="Student Email"
-          onChange={handleChange}
-          required
-          disabled={isLoading}
-        />
-        <input
-          name="password"
-          type="password"
-          placeholder="Password"
-          onChange={handleChange}
-          required
-          disabled={isLoading}
-        />
-        <button type="submit" disabled={isLoading}>
-          {isLoading ? "Logging in..." : "Login as Student"}
+        <label>
+          Email
+          <input name="email" type="email" placeholder="student@college.com" onChange={(e) => setFormData((p) => ({ ...p, email: e.target.value }))} required disabled={isLoading} />
+        </label>
+        <label>
+          Password
+          <input name="password" type="password" placeholder="Enter password" onChange={(e) => setFormData((p) => ({ ...p, password: e.target.value }))} required disabled={isLoading} />
+        </label>
+        <button type="submit" className="btn-primary" disabled={isLoading}>
+          {isLoading ? "Logging in..." : "Login"}
         </button>
       </form>
-
-      {message && (
-        <div className={`message ${isError ? "error" : "success"}`}>
-          {message}
-        </div>
-      )}
-
-      <div className="stack" style={{ marginTop: "2rem" }}>
-        <a href="/student/register" className="btn secondary">Don't have an account? Register</a>
-        <a href="/" className="btn secondary">← Back to Home</a>
-      </div>
-    </main>
+      {message && <div className={`message ${isError ? "error" : "success"}`}>{message}</div>}
+    </PageShell>
   );
 }

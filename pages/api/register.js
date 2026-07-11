@@ -1,30 +1,46 @@
 // API route for creating a new user account.
-// Role-based registration: the frontend may request student or instructor registration.
 import db from "../../lib/db";
 import { hashPassword } from "../../lib/auth";
+import { validateBody } from "../../lib/validateRequest";
+import { registerSchema } from "../../lib/schemas";
+import { rateLimit, getRateLimitKey } from "../../lib/rateLimit";
+import { logAudit } from "../../lib/audit";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ message: "Method not allowed" });
   }
 
+  const rl = await rateLimit(req, {
+    key: getRateLimitKey(req, "register"),
+    max: 5,
+    windowMs: 60 * 1000
+  });
+  if (rl.limited) {
+    return res.status(429).json({ message: "Too many registration attempts" });
+  }
+
   try {
-    const { name, email, password, role = "student" } = req.body;
-
-    if (!name || !email || !password) {
-      return res.status(400).json({ message: "All fields are required" });
+    const parsed = validateBody(req.body, registerSchema);
+    if (parsed.error) {
+      return res.status(parsed.error.status).json({ message: parsed.error.message, details: parsed.error.details });
     }
 
-    if (!["student", "instructor"].includes(role)) {
-      return res.status(400).json({ message: "Invalid role. Must be student or instructor." });
-    }
-
+    const { name, email, password, role } = parsed.data;
     const passwordHash = await hashPassword(password);
 
-    await db.execute(
+    const [result] = await db.execute(
       "INSERT INTO students (name, email, password_hash, role) VALUES (?, ?, ?, ?)",
       [name, email, passwordHash, role]
     );
+
+    await logAudit({
+      req,
+      userId: result.insertId,
+      action: "register",
+      status: "success",
+      metadata: { role }
+    });
 
     return res.status(201).json({ message: "Registration successful" });
   } catch (error) {

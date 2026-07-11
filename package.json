@@ -6,16 +6,21 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "setup-db": "node scripts/setup-db.js"
+    "test": "node --test tests/*.test.js",
+    "setup-db": "node scripts/setup-db.js",
+    "setup-accounts": "node scripts/fix-instructor.js && node scripts/fix-admin.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "html5-qrcode": "^2.3.8",
+    "jsonwebtoken": "^9.0.2",
     "mysql2": "^3.11.3",
     "next": "^14.2.5",
+    "nodemailer": "^6.9.14",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "uuid": "^10.0.0"
+    "uuid": "^10.0.0",
+    "zod": "^4.4.3"
   }
 }
