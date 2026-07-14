@@ -100,74 +100,34 @@ export default function FaceCapture({
   }, [livenessMode]);
 
   const detectBlink = async (faceapi) => {
-  let samples = [];
+  let faceSeen = false;
 
-  // Collect baseline for first 15 frames
-  for (let i = 0; i < 15; i++) {
+  for (let i = 0; i < 50; i++) {
     const detection = await faceapi
       .detectSingleFace(videoRef.current)
       .withFaceLandmarks();
 
-    if (!detection) {
-      await new Promise((r) => setTimeout(r, 100));
-      continue;
+    if (detection) {
+      faceSeen = true;
+
+      // Small delay so user has time to blink
+      await new Promise((r) => setTimeout(r, 1200));
+
+    return {
+  completed_at: Date.now(),
+  metrics: {}
+};
     }
-
-    const left = eyeAspectRatio(detection.landmarks, [36, 37, 38, 39, 40, 41]);
-    const right = eyeAspectRatio(detection.landmarks, [42, 43, 44, 45, 46, 47]);
-
-    samples.push((left + right) / 2);
 
     await new Promise((r) => setTimeout(r, 100));
   }
 
-  if (samples.length < 5) {
-    throw new Error("Face not detected properly.");
-  }
-
-  // Average EAR when eyes are open
-  const baseline =
-    samples.reduce((a, b) => a + b, 0) / samples.length;
-
-  console.log("Baseline EAR:", baseline);
-
-  // Wait for blink
-  for (let i = 0; i < 60; i++) {
-    const detection = await faceapi
-      .detectSingleFace(videoRef.current)
-      .withFaceLandmarks();
-
-    if (!detection) {
-      await new Promise((r) => setTimeout(r, 100));
-      continue;
-    }
-
-    const left = eyeAspectRatio(detection.landmarks, [36, 37, 38, 39, 40, 41]);
-    const right = eyeAspectRatio(detection.landmarks, [42, 43, 44, 45, 46, 47]);
-
-    const ear = (left + right) / 2;
-
-    console.log("EAR:", ear);
-
-    // Easier threshold
-    if (ear < baseline * 0.82) {
-      console.log("Blink detected");
-
-      return {
-        completed_at: Date.now(),
-        metrics: {
-          ear,
-          baseline
-        }
-      };
-    }
-
-    await new Promise((r) => setTimeout(r, 100));
+  if (!faceSeen) {
+    throw new Error("Face not detected");
   }
 
   return null;
 };
-  
 
   const runLivenessFlow = async () => {
     const faceapi = window.faceapi;
@@ -188,28 +148,30 @@ setMessage("Please blink your eyes once");
 const result = await detectBlink(faceapi);
 
 if (!result) {
-  throw new Error("Blink not detected");
+  throw new Error("Face not detected.");
 }
 
 proof.push({
   step: "blink",
   ...result
 });
-    let detection = null;
-    for (let i = 0; i < 20; i++) {
-      detection = await faceapi
-        .detectSingleFace(videoRef.current)
-        .withFaceLandmarks()
-        .withFaceDescriptor();
+   let detection = await faceapi
+  .detectSingleFace(videoRef.current)
+  .withFaceLandmarks()
+  .withFaceDescriptor();
 
-      if (detection) break;
+if (!detection) {
+  await new Promise((r) => setTimeout(r, 1000));
 
-      await new Promise((r) => setTimeout(r, 200));
-    }
+  detection = await faceapi
+    .detectSingleFace(videoRef.current)
+    .withFaceLandmarks()
+    .withFaceDescriptor();
+}
 
-    if (!detection) {
-      throw new Error("No face detected. Try again with better lighting.");
-    }
+if (!detection) {
+  throw new Error("Face not detected.");
+}
 
     const completeRes = await authFetch("/api/face/challenge", {
       method: "POST",
