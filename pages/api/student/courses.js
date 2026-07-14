@@ -1,9 +1,7 @@
-// API endpoint for students to browse and select available courses (JWT protected).
-import { connectDB } from "../../lib/db";
-import Course from "../../lib/models/Course.js";
-import { authenticateRequest } from "../../lib/apiAuth";
-import { docId } from "../../lib/mongo";
-
+import { connectDB } from "../../../lib/db";
+import Course from "../../../lib/models/Course.js";
+import { authenticateRequest } from "../../../lib/apiAuth";
+import { docId } from "../../../lib/mongo";
 export default async function handler(req, res) {
   if (req.method !== "GET") {
     return res.status(405).json({ message: "Method not allowed" });
