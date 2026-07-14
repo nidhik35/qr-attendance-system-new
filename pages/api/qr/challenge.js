@@ -1,5 +1,7 @@
 // Validate scanned QR and issue a one-time attendance challenge token (student-only).
-import db from "../../../lib/db";
+import { connectDB } from "../../../lib/db";
+import Session from "../../../lib/models/Session.js";
+import User from "../../../lib/models/User.js";
 import { authenticateRequest, getClientIp } from "../../../lib/apiAuth";
 import { validateQrTimestamp, verifyQrSignature } from "../../../lib/qr";
 import { signAttendanceChallengeToken } from "../../../lib/jwt";
@@ -8,6 +10,7 @@ import { qrChallengeSchema } from "../../../lib/schemas";
 import { rateLimit, getRateLimitKey } from "../../../lib/rateLimit";
 import { logAudit } from "../../../lib/audit";
 import { getDeviceId } from "../../../lib/device";
+import { toObjectId } from "../../../lib/mongo";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -29,17 +32,31 @@ export default async function handler(req, res) {
       return res.status(429).json({ message: "Too many QR challenge requests" });
     }
 
+    await connectDB();
     const parsed = validateBody(req.body, qrChallengeSchema);
     if (parsed.error) {
       return res.status(parsed.error.status).json(parsed.error);
     }
 
-    const { session_id, timestamp, nonce, signature, device_id } = parsed.data;
+    const { session_id, timestamp, expires_at, nonce, signature, device_id } = parsed.data;
     const studentId = auth.user.id;
     const clientIp = getClientIp(req);
     const normalizedDevice = getDeviceId(device_id || req.headers["user-agent"] || "unknown");
 
-    if (!verifyQrSignature(session_id, timestamp, nonce, signature)) {
+    // Build the full payload for signature verification
+    const qrPayload = {
+      session_id,
+      timestamp,
+      expires_at,
+      nonce,
+      signature,
+      instructor_id: parsed.data.instructor_id,
+      instructor_name: parsed.data.instructor_name,
+      subject: parsed.data.subject
+    };
+
+    // Verify QR signature
+    if (!verifyQrSignature(qrPayload)) {
       await logAudit({
         req,
         userId: studentId,
@@ -51,6 +68,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ message: "Invalid QR signature — screenshot or tampered code rejected" });
     }
 
+    // Validate QR timestamp
     const tsCheck = validateQrTimestamp(timestamp);
     if (!tsCheck.valid) {
       await logAudit({
@@ -66,14 +84,10 @@ export default async function handler(req, res) {
       });
     }
 
-    const [sessions] = await db.execute(
-      `SELECT s.session_id, s.course_id, s.created_at, s.is_active
-       FROM sessions s
-       WHERE s.session_id = ?`,
-      [session_id]
-    );
+    // Fetch and validate session
+    const session = await Session.findOne({ session_id }).lean();
 
-    if (sessions.length === 0 || !sessions[0].is_active) {
+    if (!session || !session.is_active) {
       await logAudit({
         req,
         userId: studentId,
@@ -85,9 +99,9 @@ export default async function handler(req, res) {
       return res.status(400).json({ message: "Invalid or inactive session" });
     }
 
-    const session = sessions[0];
-    const sessionAge = Date.now() - new Date(session.created_at).getTime();
-    if (sessionAge > 35 * 1000) {
+    // Check if session has expired (safety check)
+    const sessionAge = Date.now() - new Date(session.qr_generated_at).getTime();
+    if (sessionAge > 35 * 1000) { // 30s + 5s tolerance
       await logAudit({
         req,
         userId: studentId,
@@ -99,11 +113,9 @@ export default async function handler(req, res) {
       return res.status(400).json({ message: "Session window closed — ask instructor for a new QR" });
     }
 
-    const [students] = await db.execute(
-      "SELECT device_id FROM students WHERE id = ?",
-      [studentId]
-    );
-    if (students[0]?.device_id && students[0].device_id !== normalizedDevice) {
+    // Verify device match
+    const student = await User.findById(toObjectId(studentId)).select("device_id").lean();
+    if (student?.device_id && student.device_id !== normalizedDevice) {
       await logAudit({
         req,
         userId: studentId,
@@ -112,13 +124,15 @@ export default async function handler(req, res) {
         status: "flagged",
         metadata: { reason: "device_mismatch", ip: clientIp }
       });
-      return res.status(403).json({ message: "Device mismatch" });
+      return res.status(403).json({ message: "Device mismatch — QR forwarding detected" });
     }
 
+    // Create attendance challenge token
     const attendanceChallengeToken = signAttendanceChallengeToken({
       studentId,
       sessionId: session_id,
-      courseId: session.course_id,
+      courseId: String(session.course_id),
+      instructorId: String(session.instructor_id),
       deviceId: normalizedDevice,
       qrTimestamp: Number(timestamp)
     });
@@ -129,14 +143,20 @@ export default async function handler(req, res) {
       action: "qr_challenge",
       resource: session_id,
       status: "success",
-      metadata: { course_id: session.course_id, ip: clientIp, device: normalizedDevice }
+      metadata: {
+        course_id: String(session.course_id),
+        course_code: session.course_code,
+        ip: clientIp,
+        device: normalizedDevice
+      }
     });
 
     return res.status(200).json({
       success: true,
       attendance_challenge_token: attendanceChallengeToken,
       session_id,
-      course_id: session.course_id
+      course_id: String(session.course_id),
+      course_code: session.course_code
     });
   } catch (error) {
     console.error("QR challenge error:", error);

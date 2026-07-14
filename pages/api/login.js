@@ -1,5 +1,6 @@
 // API route for role-based login with device binding and JWT token pair.
-import db from "../../lib/db";
+import { connectDB } from "../../lib/db";
+import User from "../../lib/models/User.js";
 import { comparePassword } from "../../lib/auth";
 import { getDeviceId } from "../../lib/device";
 import { getClientIp } from "../../lib/apiAuth";
@@ -8,6 +9,7 @@ import { validateBody } from "../../lib/validateRequest";
 import { loginSchema } from "../../lib/schemas";
 import { rateLimit, getRateLimitKey } from "../../lib/rateLimit";
 import { logAudit } from "../../lib/audit";
+import { docId } from "../../lib/mongo";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -24,6 +26,7 @@ export default async function handler(req, res) {
   }
 
   try {
+    await connectDB();
     const parsed = validateBody(req.body, loginSchema);
     if (parsed.error) {
       return res.status(parsed.error.status).json({ success: false, message: parsed.error.message, details: parsed.error.details });
@@ -40,22 +43,18 @@ export default async function handler(req, res) {
       });
     }
 
-    let query =
-      "SELECT id, name, email, password_hash, device_id, role, token_version FROM students WHERE email = ?";
-    const params = [email];
-
+    const query = { email: email.toLowerCase() };
     if (isAdminLogin) {
-      query += " AND role = 'admin'";
+      query.role = "admin";
     } else if (isInstructorLogin) {
-      query += " AND role = 'instructor'";
+      query.role = "instructor";
     } else {
-      query += " AND role = ?";
-      params.push(role);
+      query.role = role;
     }
 
-    const [rows] = await db.execute(query, params);
+    const user = await User.findOne(query).lean();
 
-    if (rows.length === 0) {
+    if (!user) {
       await logAudit({ req, action: "login", status: "failed", metadata: { email, reason: "not_found" } });
       return res.status(401).json({
         success: false,
@@ -63,10 +62,9 @@ export default async function handler(req, res) {
       });
     }
 
-    const user = rows[0];
     const isValidPassword = await comparePassword(password, user.password_hash);
     if (!isValidPassword) {
-      await logAudit({ req, userId: user.id, action: "login", status: "failed", metadata: { reason: "bad_password" } });
+      await logAudit({ req, userId: docId(user), action: "login", status: "failed", metadata: { reason: "bad_password" } });
       return res.status(401).json({
         success: false,
         message: "Invalid credentials"
@@ -76,14 +74,11 @@ export default async function handler(req, res) {
     const safeDeviceId = device_id || "unknown-device";
     const normalizedDeviceId = getDeviceId(safeDeviceId);
     if (!user.device_id) {
-      await db.execute("UPDATE students SET device_id = ? WHERE id = ?", [
-        normalizedDeviceId,
-        user.id
-      ]);
+      await User.updateOne({ _id: user._id }, { device_id: normalizedDeviceId });
     } else if (user.device_id !== normalizedDeviceId) {
       await logAudit({
         req,
-        userId: user.id,
+        userId: docId(user),
         action: "login",
         status: "flagged",
         metadata: { reason: "device_mismatch" }
@@ -95,10 +90,10 @@ export default async function handler(req, res) {
     }
 
     const clientIp = getClientIp(req);
-    await db.execute("UPDATE students SET last_login_ip = ? WHERE id = ?", [clientIp, user.id]);
+    await User.updateOne({ _id: user._id }, { last_login_ip: clientIp });
 
     const userPayload = {
-      id: user.id,
+      id: docId(user),
       name: user.name,
       email: user.email,
       role: user.role,
@@ -108,13 +103,13 @@ export default async function handler(req, res) {
     const tokens = await issueTokenPair(userPayload, normalizedDeviceId);
     setRefreshCookie(res, tokens.refreshToken);
 
-    await logAudit({ req, userId: user.id, action: "login", status: "success", metadata: { role: user.role } });
+    await logAudit({ req, userId: userPayload.id, action: "login", status: "success", metadata: { role: user.role } });
 
     return res.status(200).json({
       success: true,
       message: "Login successful",
       accessToken: tokens.accessToken,
-      userId: user.id,
+      userId: userPayload.id,
       role: user.role,
       user: {
         id: userPayload.id,

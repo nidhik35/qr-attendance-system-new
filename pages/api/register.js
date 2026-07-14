@@ -1,10 +1,12 @@
 // API route for creating a new user account.
-import db from "../../lib/db";
+import { connectDB } from "../../lib/db";
+import User from "../../lib/models/User.js";
 import { hashPassword } from "../../lib/auth";
 import { validateBody } from "../../lib/validateRequest";
 import { registerSchema } from "../../lib/schemas";
 import { rateLimit, getRateLimitKey } from "../../lib/rateLimit";
 import { logAudit } from "../../lib/audit";
+import { isDuplicateKeyError, docId } from "../../lib/mongo";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -21,6 +23,7 @@ export default async function handler(req, res) {
   }
 
   try {
+    await connectDB();
     const parsed = validateBody(req.body, registerSchema);
     if (parsed.error) {
       return res.status(parsed.error.status).json({ message: parsed.error.message, details: parsed.error.details });
@@ -29,14 +32,16 @@ export default async function handler(req, res) {
     const { name, email, password, role } = parsed.data;
     const passwordHash = await hashPassword(password);
 
-    const [result] = await db.execute(
-      "INSERT INTO students (name, email, password_hash, role) VALUES (?, ?, ?, ?)",
-      [name, email, passwordHash, role]
-    );
+    const user = await User.create({
+      name,
+      email: email.toLowerCase(),
+      password_hash: passwordHash,
+      role
+    });
 
     await logAudit({
       req,
-      userId: result.insertId,
+      userId: docId(user),
       action: "register",
       status: "success",
       metadata: { role }
@@ -44,7 +49,7 @@ export default async function handler(req, res) {
 
     return res.status(201).json({ message: "Registration successful" });
   } catch (error) {
-    if (error.code === "ER_DUP_ENTRY") {
+    if (isDuplicateKeyError(error)) {
       return res.status(409).json({ message: "Email already registered" });
     }
     return res.status(500).json({ message: "Server error during registration" });

@@ -1,10 +1,9 @@
-// Script to create or update instructor account.
-// Role-based authentication: Sets role to 'instructor' for admin account creation.
-// This script should be used by administrators to create instructor accounts.
-const fs = require("fs");
-const path = require("path");
-const mysql = require("mysql2/promise");
-const bcrypt = require("bcryptjs");
+import fs from "fs";
+import path from "path";
+import bcrypt from "bcryptjs";
+import { connectDB } from "../lib/db.js";
+import User from "../lib/models/User.js";
+import Course from "../lib/models/Course.js";
 
 function loadEnv() {
   const envPath = path.join(process.cwd(), ".env.local");
@@ -21,44 +20,42 @@ function loadEnv() {
 
 async function run() {
   loadEnv();
-  const conn = await mysql.createConnection({
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    port: Number(process.env.DB_PORT || 3306)
-  });
+  await connectDB();
 
   const hash = await bcrypt.hash("Instructor@123", 10);
 
-  // Role-based authentication: Create instructor account with 'instructor' role
-  await conn.execute(
-    `INSERT INTO students (name, email, password_hash, role)
-     VALUES (?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE
-       name = VALUES(name),
-       password_hash = VALUES(password_hash),
-       role = VALUES(role), -- Role-based authentication: Ensure role remains 'instructor'
-       device_id = NULL`,
-    ["Instructor", "instructor@gmail.com", hash, "instructor"]
+  let instructor = await User.findOneAndUpdate(
+    { email: "instructor@gmail.com" },
+    {
+      $set: {
+        name: "Instructor",
+        password_hash: hash,
+        role: "instructor",
+        device_id: null
+      }
+    },
+    { upsert: true, new: true }
   );
 
-  const [rows] = await conn.execute(
-    "SELECT id FROM students WHERE email = 'instructor@gmail.com' LIMIT 1"
+  const lat = Number(process.env.CLASSROOM_LAT || 12.9141);
+  const lng = Number(process.env.CLASSROOM_LNG || 74.856);
+  await Course.updateOne(
+    { course_code: "CSE101" },
+    {
+      $set: {
+        course_name: "Computer Networks",
+        instructor_id: instructor._id,
+        classroom_lat: lat,
+        classroom_lng: lng,
+        radius_meters: 50
+      },
+      $setOnInsert: { course_code: "CSE101" }
+    },
+    { upsert: true }
   );
-  if (rows.length > 0) {
-    const instructorId = rows[0].id;
-    const lat = process.env.CLASSROOM_LAT || "12.9141";
-    const lng = process.env.CLASSROOM_LNG || "74.8560";
-    await conn.execute(
-      `INSERT IGNORE INTO courses (course_code, course_name, instructor_id, classroom_lat, classroom_lng, radius_meters)
-       VALUES ('CSE101', 'Computer Networks', ?, ?, ?, 50)`,
-      [instructorId, lat, lng]
-    );
-  }
 
-  await conn.end();
-  console.log("Instructor account created/updated successfully with role-based authentication.");
+  console.log("Instructor account created/updated successfully.");
+  process.exit(0);
 }
 
 run().catch((err) => {

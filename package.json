@@ -2,6 +2,7 @@
   "name": "qr-attendance-system",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -14,7 +15,7 @@
     "bcryptjs": "^2.4.3",
     "html5-qrcode": "^2.3.8",
     "jsonwebtoken": "^9.0.2",
-    "mysql2": "^3.11.3",
+    "mongoose": "^8.9.5",
     "next": "^14.2.5",
     "nodemailer": "^6.9.14",
     "qrcode": "^1.5.4",

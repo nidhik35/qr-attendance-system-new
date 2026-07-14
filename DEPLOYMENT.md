@@ -8,12 +8,9 @@
 4. Add Environment Variables:
 
 ```env
-DB_HOST=
-DB_USER=
-DB_PASSWORD=
-DB_NAME=
-DB_PORT=3306
+MONGODB_URI=mongodb://localhost:27017/qr_attendance
 JWT_SECRET=your-long-random-secret
+QR_HMAC_SECRET=your-qr-hmac-secret
 CLASSROOM_LAT=12.9141
 CLASSROOM_LNG=74.8560
 CLASSROOM_RADIUS_METERS=50
@@ -28,12 +25,12 @@ SMTP_FROM=
 
 ## 2) Database Hosting Options
 
-Use any managed MySQL:
+Use any managed MongoDB:
 
-- PlanetScale
-- Railway MySQL
-- AWS RDS
-- Render MySQL
+- MongoDB Atlas
+- Railway MongoDB
+- AWS DocumentDB
+- Render MongoDB
 
 Run:
 

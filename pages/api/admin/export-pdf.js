@@ -1,5 +1,8 @@
 // Admin printable report export (JWT protected, HTML -> print as PDF).
-import db from "../../../lib/db";
+import { connectDB } from "../../../lib/db";
+import Attendance from "../../../lib/models/Attendance.js";
+import User from "../../../lib/models/User.js";
+import Session from "../../../lib/models/Session.js";
 import { authenticateRequest } from "../../../lib/apiAuth";
 
 export default async function handler(req, res) {
@@ -13,33 +16,33 @@ export default async function handler(req, res) {
       return res.status(auth.error.status).json({ message: auth.error.message });
     }
 
-    const [rows] = await db.execute(`
-      SELECT
-        st.name AS student_name,
-        st.email AS student_email,
-        s.course_id,
-        a.session_id,
-        a.status,
-        a.date
-      FROM attendance a
-      JOIN students st ON st.id = a.student_id
-      LEFT JOIN sessions s ON s.session_id = a.session_id
-      ORDER BY a.date DESC
-      LIMIT 300
-    `);
+    await connectDB();
+    const rows = await Attendance.find().sort({ date: -1 }).limit(300).lean();
+    const studentIds = [...new Set(rows.map((r) => String(r.student_id)))];
+    const sessionIds = [...new Set(rows.map((r) => r.session_id))];
+
+    const [students, sessions] = await Promise.all([
+      User.find({ _id: { $in: studentIds } }).select("name email").lean(),
+      Session.find({ session_id: { $in: sessionIds } }).lean()
+    ]);
+
+    const studentMap = Object.fromEntries(students.map((s) => [String(s._id), s]));
+    const sessionMap = Object.fromEntries(sessions.map((s) => [s.session_id, s]));
 
     const tableRows = rows
-      .map(
-        (row) => `
+      .map((row) => {
+        const student = studentMap[String(row.student_id)];
+        const session = sessionMap[row.session_id];
+        return `
       <tr>
-        <td>${row.student_name}</td>
-        <td>${row.student_email}</td>
-        <td>${row.course_id || "N/A"}</td>
+        <td>${student?.name || ""}</td>
+        <td>${student?.email || ""}</td>
+        <td>${session?.course_id || "N/A"}</td>
         <td>${row.session_id}</td>
         <td>${row.status}</td>
         <td>${new Date(row.date).toLocaleString()}</td>
-      </tr>`
-      )
+      </tr>`;
+      })
       .join("");
 
     const html = `<!DOCTYPE html>

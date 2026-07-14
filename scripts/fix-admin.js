@@ -1,7 +1,8 @@
-const fs = require("fs");
-const path = require("path");
-const mysql = require("mysql2/promise");
-const bcrypt = require("bcryptjs");
+import fs from "fs";
+import path from "path";
+import bcrypt from "bcryptjs";
+import { connectDB } from "../lib/db.js";
+import User from "../lib/models/User.js";
 
 function loadEnvFile() {
   const envPath = path.join(process.cwd(), ".env.local");
@@ -16,28 +17,24 @@ function loadEnvFile() {
 
 async function run() {
   loadEnvFile();
-  const conn = await mysql.createConnection({
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    port: Number(process.env.DB_PORT || 3306)
-  });
+  await connectDB();
 
   const hash = await bcrypt.hash("Admin@123", 10);
-  await conn.execute(
-    `INSERT INTO students (name, email, password_hash, role, device_id)
-     VALUES (?, ?, ?, 'admin', NULL)
-     ON DUPLICATE KEY UPDATE
-       name = VALUES(name),
-       password_hash = VALUES(password_hash),
-       role = 'admin',
-       device_id = NULL`,
-    ["System Admin", "admin@college.com", hash]
+  await User.findOneAndUpdate(
+    { email: "admin@college.com" },
+    {
+      $set: {
+        name: "System Admin",
+        password_hash: hash,
+        role: "admin",
+        device_id: null
+      }
+    },
+    { upsert: true }
   );
 
-  await conn.end();
   console.log("Admin account ready: admin@college.com / Admin@123");
+  process.exit(0);
 }
 
 run().catch((err) => {

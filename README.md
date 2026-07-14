@@ -1,6 +1,6 @@
 # Secure QR Code Based Attendance System
 
-A complete full-stack attendance system built with Next.js (App Router), MySQL, bcrypt authentication, QR generation, and QR scanning with **role-based authentication** supporting separate workflows for students and instructors.
+A complete full-stack attendance system built with Next.js (App Router), MongoDB (Mongoose), bcrypt authentication, QR generation, and QR scanning with **role-based authentication** supporting separate workflows for students and instructors.
 
 ## 1. Role-Based Architecture
 
@@ -15,7 +15,7 @@ A complete full-stack attendance system built with Next.js (App Router), MySQL, 
 ## 2. Tech Stack
 
 - **Frontend + Backend:** Next.js (App Router + API routes)
-- **Database:** MySQL with role-based schema
+- **Database:** MongoDB with Mongoose ODM
 - **Authentication:** `bcryptjs` with role validation
 - **QR Generation:** `qrcode`
 - **QR Scanning:** `html5-qrcode`
@@ -135,11 +135,11 @@ npm install
 ### 2. Configure Environment
 Create/update `.env.local`:
 ```env
-DB_HOST=localhost
-DB_USER=attendance_user
-DB_PASSWORD=StrongPass123!
-DB_NAME=qr_attendance
-DB_PORT=3306
+MONGODB_URI=mongodb://localhost:27017/qr_attendance
+JWT_SECRET=your-long-random-secret
+QR_HMAC_SECRET=your-qr-hmac-secret
+CLASSROOM_LAT=12.9141
+CLASSROOM_LNG=74.8560
 ```
 
 ### 3. Setup Database

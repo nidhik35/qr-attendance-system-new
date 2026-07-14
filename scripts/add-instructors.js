@@ -1,8 +1,8 @@
-// Script to create multiple instructor accounts for testing
-const fs = require("fs");
-const path = require("path");
-const mysql = require("mysql2/promise");
-const bcrypt = require("bcryptjs");
+import fs from "fs";
+import path from "path";
+import bcrypt from "bcryptjs";
+import { connectDB } from "../lib/db.js";
+import User from "../lib/models/User.js";
 
 function loadEnv() {
   const envPath = path.join(process.cwd(), ".env.local");
@@ -19,13 +19,7 @@ function loadEnv() {
 
 async function addInstructors() {
   loadEnv();
-  const conn = await mysql.createConnection({
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    port: Number(process.env.DB_PORT || 3306)
-  });
+  await connectDB();
 
   const instructors = [
     { name: "Instructor One", email: "instructor1@gmail.com", password: "Instructor@123" },
@@ -38,15 +32,22 @@ async function addInstructors() {
 
   for (const inst of instructors) {
     const hash = await bcrypt.hash(inst.password, 10);
-    await conn.execute(
-      "INSERT INTO students (name, email, password_hash, role) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name), password_hash = VALUES(password_hash), role = VALUES(role)",
-      [inst.name, inst.email, hash, "instructor"]
+    await User.findOneAndUpdate(
+      { email: inst.email },
+      {
+        $set: {
+          name: inst.name,
+          password_hash: hash,
+          role: "instructor"
+        }
+      },
+      { upsert: true }
     );
-    console.log(`✅ Created/Updated: ${inst.email} / ${inst.password}`);
+    console.log(`Created/Updated: ${inst.email} / ${inst.password}`);
   }
 
-  await conn.end();
-  console.log("\n✅ All instructor accounts ready!");
+  console.log("\nAll instructor accounts ready!");
+  process.exit(0);
 }
 
 addInstructors().catch((err) => {

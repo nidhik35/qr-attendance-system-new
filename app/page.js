@@ -27,7 +27,8 @@ export default function HomePage() {
           <h2>Generate QR</h2>
           <p>Create time-limited session QR codes for your class.</p>
           <div className="stack">
-            <Link href="/instructor/login" className="btn btn-primary">Instructor Login</Link>
+            <Link href="/instructor/register" className="btn btn-primary">Register</Link>
+            <Link href="/instructor/login" className="btn btn-secondary">Login</Link>
           </div>
         </article>
 

@@ -1,106 +1,145 @@
-// Admin analytics API with audit log feed (JWT protected, admin role only).
-import db from "../../../lib/db";
-import { authenticateRequest } from "../../../lib/apiAuth";
-
-export default async function handler(req, res) {
-  if (req.method !== "GET") {
-    return res.status(405).json({ message: "Method not allowed" });
-  }
-
-  try {
-    const auth = await authenticateRequest(req, ["admin"]);
-    if (auth.error) {
-      return res.status(auth.error.status).json({ message: auth.error.message });
-    }
-
-    const [[counts]] = await db.query(`
-      SELECT
-        (SELECT COUNT(*) FROM students WHERE role = 'student') AS total_students,
-        (SELECT COUNT(*) FROM students WHERE role = 'instructor') AS total_instructors,
-        (SELECT COUNT(*) FROM sessions) AS total_sessions,
-        (SELECT COUNT(*) FROM attendance) AS total_attendance
-    `);
-
-    const [courseStats] = await db.query(`
-      SELECT
-        s.course_id,
-        COUNT(DISTINCT s.session_id) AS sessions_count,
-        COUNT(a.id) AS present_count
-      FROM sessions s
-      LEFT JOIN attendance a ON a.session_id = s.session_id
-      GROUP BY s.course_id
-      ORDER BY present_count DESC
-    `);
-
-    const [monthlyStats] = await db.query(`
-      SELECT
-        DATE_FORMAT(a.date, '%Y-%m') AS month,
-        COUNT(*) AS attendance_count
-      FROM attendance a
-      GROUP BY DATE_FORMAT(a.date, '%Y-%m')
-      ORDER BY month DESC
-      LIMIT 6
-    `);
-
-    const [lowAttendance] = await db.query(`
-      SELECT
-        st.id,
-        st.name,
-        st.email,
-        COUNT(DISTINCT s.session_id) AS total_sessions,
-        COUNT(DISTINCT a.session_id) AS attended_sessions,
-        ROUND(
-          (COUNT(DISTINCT a.session_id) / NULLIF(COUNT(DISTINCT s.session_id), 0)) * 100,
-          2
-        ) AS attendance_percentage
-      FROM students st
-      CROSS JOIN sessions s
-      LEFT JOIN attendance a
-        ON a.student_id = st.id AND a.session_id = s.session_id
-      WHERE st.role = 'student'
-      GROUP BY st.id, st.name, st.email
-      HAVING attendance_percentage < 50 OR attendance_percentage IS NULL
-      ORDER BY attendance_percentage ASC
-      LIMIT 20
-    `);
-
-    const [auditLogs] = await db.query(`
-      SELECT
-        al.id,
-        al.user_id,
-        st.name AS user_name,
-        al.action,
-        al.resource,
-        al.status,
-        al.ip_address,
-        al.created_at,
-        al.metadata
-      FROM audit_logs al
-      LEFT JOIN students st ON st.id = al.user_id
-      ORDER BY al.created_at DESC
-      LIMIT 100
-    `);
-
-    const [auditSummary] = await db.query(`
-      SELECT
-        status,
-        COUNT(*) AS count
-      FROM audit_logs
-      WHERE created_at >= (NOW() - INTERVAL 7 DAY)
-      GROUP BY status
-    `);
-
-    return res.status(200).json({
-      summary: counts,
-      courseStats,
-      monthlyStats,
-      lowAttendance,
-      auditLogs,
-      auditSummary
-    });
-  } catch (error) {
-    console.error("Admin analytics error:", error);
-    return res.status(500).json({ message: "Server error while loading analytics" });
-  }
-}
-
+// Admin analytics API with audit log feed (JWT protected, admin role only).
+import { connectDB } from "../../../lib/db";
+import User from "../../../lib/models/User.js";
+import Course from "../../../lib/models/Course.js";
+import Session from "../../../lib/models/Session.js";
+import Attendance from "../../../lib/models/Attendance.js";
+import AuditLog from "../../../lib/models/AuditLog.js";
+import { authenticateRequest } from "../../../lib/apiAuth";
+import { docId, toObjectId } from "../../../lib/mongo";
+
+export default async function handler(req, res) {
+  if (req.method !== "GET") {
+    return res.status(405).json({ message: "Method not allowed" });
+  }
+
+  try {
+    const auth = await authenticateRequest(req, ["admin"]);
+    if (auth.error) {
+      return res.status(auth.error.status).json({ message: auth.error.message });
+    }
+
+    await connectDB();
+
+    const [total_students, total_instructors, total_courses, total_sessions, total_attendance] = await Promise.all([
+      User.countDocuments({ role: "student" }),
+      User.countDocuments({ role: "instructor" }),
+      Course.countDocuments(),
+      Session.countDocuments(),
+      Attendance.countDocuments()
+    ]);
+
+    const courses = await Course.find().select("_id course_code course_name instructor_id").lean();
+    const sessions = await Session.find().lean();
+    const allAttendance = await Attendance.find().lean();
+    
+    const courseStatsMap = {};
+    for (const c of courses) {
+      const courseId = docId(c);
+      courseStatsMap[courseId] = {
+        course_id: courseId,
+        course_code: c.course_code,
+        course_name: c.course_name,
+        sessions_count: 0,
+        present_count: 0
+      };
+    }
+
+    for (const s of sessions) {
+      const courseId = docId(s.course_id);
+      if (courseStatsMap[courseId]) {
+        courseStatsMap[courseId].sessions_count += 1;
+      }
+    }
+
+    const sessionCourseMap = Object.fromEntries(sessions.map((s) => [s.session_id, docId(s.course_id)]));
+    for (const a of allAttendance) {
+      const courseId = sessionCourseMap[a.session_id];
+      if (courseId && courseStatsMap[courseId]) {
+        courseStatsMap[courseId].present_count += 1;
+      }
+    }
+
+    const courseStats = Object.values(courseStatsMap)
+      .filter((c) => c.sessions_count > 0)
+      .sort((a, b) => b.present_count - a.present_count);
+
+    const monthlyStats = await Attendance.aggregate([
+      {
+        $group: {
+          _id: { $dateToString: { format: "%Y-%m", date: "$date" } },
+          attendance_count: { $sum: 1 }
+        }
+      },
+      { $sort: { _id: -1 } },
+      { $limit: 6 },
+      { $project: { month: "$_id", attendance_count: 1, _id: 0 } }
+    ]);
+
+    const students = await User.find({ role: "student" }).select("name email").lean();
+    const sessionIds = sessions.map((s) => s.session_id);
+    const studentAttendance = await Attendance.find({ session_id: { $in: sessionIds } }).lean();
+
+    const attendanceByStudent = {};
+    for (const a of studentAttendance) {
+      const sid = docId(a.student_id);
+      if (!attendanceByStudent[sid]) attendanceByStudent[sid] = new Set();
+      attendanceByStudent[sid].add(a.session_id);
+    }
+
+    const totalSessions = sessionIds.length;
+    const lowAttendance = students
+      .map((st) => {
+        const sid = docId(st);
+        const attended = attendanceByStudent[sid]?.size || 0;
+        const attendance_percentage = totalSessions > 0 ? Math.round((attended / totalSessions) * 10000) / 100 : 0;
+        return {
+          id: sid,
+          name: st.name,
+          email: st.email,
+          total_sessions: totalSessions,
+          attended_sessions: attended,
+          attendance_percentage
+        };
+      })
+      .filter((s) => s.attendance_percentage < 50)
+      .sort((a, b) => a.attendance_percentage - b.attendance_percentage)
+      .slice(0, 20);
+
+    const auditLogsRaw = await AuditLog.find().sort({ created_at: -1 }).limit(100).lean();
+    const auditUserIds = [...new Set(auditLogsRaw.map((l) => docId(l.user_id)).filter(Boolean))];
+    const auditUsers = await User.find({ _id: { $in: auditUserIds.map(toObjectId) } }).select("name").lean();
+    const nameMap = Object.fromEntries(auditUsers.map((u) => [docId(u), u.name]));
+
+    const auditLogs = auditLogsRaw.map((log) => ({
+      id: docId(log),
+      user_id: log.user_id ? docId(log.user_id) : null,
+      user_name: log.user_id ? nameMap[docId(log.user_id)] || null : null,
+      action: log.action,
+      resource: log.resource,
+      status: log.status,
+      ip_address: log.ip_address,
+      created_at: log.created_at,
+      metadata: log.metadata
+    }));
+
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const auditSummary = await AuditLog.aggregate([
+      { $match: { created_at: { $gte: sevenDaysAgo } } },
+      { $group: { _id: "$status", count: { $sum: 1 } } },
+      { $project: { status: "$_id", count: 1, _id: 0 } }
+    ]);
+
+    return res.status(200).json({
+      summary: { total_students, total_instructors, total_courses, total_sessions, total_attendance },
+      courseStats,
+      monthlyStats,
+      lowAttendance,
+      auditLogs,
+      auditSummary
+    });
+  } catch (error) {
+    console.error("Admin analytics error:", error);
+    return res.status(500).json({ message: "Server error while loading analytics" });
+  }
+}

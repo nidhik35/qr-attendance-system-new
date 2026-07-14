@@ -1,3 +1,5 @@
+import { connectDB } from "../../../lib/db";
+import User from "../../../lib/models/User.js";
 import { verifyRefreshToken } from "../../../lib/jwt";
 import {
   getRefreshTokenFromRequest,
@@ -6,7 +8,7 @@ import {
   clearRefreshCookie
 } from "../../../lib/refreshToken";
 import { rateLimit, getRateLimitKey } from "../../../lib/rateLimit";
-import db from "../../../lib/db";
+import { docId } from "../../../lib/mongo";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -23,6 +25,7 @@ export default async function handler(req, res) {
   }
 
   try {
+    await connectDB();
     const refreshToken = getRefreshTokenFromRequest(req);
     if (!refreshToken) {
       return res.status(401).json({ message: "Refresh token required" });
@@ -42,23 +45,19 @@ export default async function handler(req, res) {
       return res.status(401).json({ message: result.error });
     }
 
-    const [users] = await db.execute(
-      "SELECT id, name, email, role, token_version FROM students WHERE id = ?",
-      [decoded.id]
-    );
-    if (users.length === 0) {
+    const user = await User.findById(decoded.id).lean();
+    if (!user) {
       clearRefreshCookie(res);
       return res.status(401).json({ message: "User not found" });
     }
 
-    const user = users[0];
     setRefreshCookie(res, result.refreshToken);
 
     return res.status(200).json({
       success: true,
       accessToken: result.accessToken,
       user: {
-        id: user.id,
+        id: docId(user),
         name: user.name,
         email: user.email,
         role: user.role
