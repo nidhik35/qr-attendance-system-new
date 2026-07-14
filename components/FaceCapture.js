@@ -100,41 +100,73 @@ export default function FaceCapture({
   }, [livenessMode]);
 
   const detectBlink = async (faceapi) => {
-    let baseline = null;
+  let samples = [];
 
-    for (let i = 0; i < 80; i++) {
-      const detection = await faceapi
-        .detectSingleFace(videoRef.current)
-        .withFaceLandmarks();
+  // Collect baseline for first 15 frames
+  for (let i = 0; i < 15; i++) {
+    const detection = await faceapi
+      .detectSingleFace(videoRef.current)
+      .withFaceLandmarks();
 
-      if (!detection) {
-        await new Promise((r) => setTimeout(r, 100));
-        continue;
-      }
-
-      const left = eyeAspectRatio(detection.landmarks, [36, 37, 38, 39, 40, 41]);
-      const right = eyeAspectRatio(detection.landmarks, [42, 43, 44, 45, 46, 47]);
-
-      const ear = (left + right) / 2;
-
-      if (baseline === null) {
-        baseline = ear;
-      }
-
-      // Blink: eyes close noticeably relative to the baseline-open state
-      if (ear < baseline * 0.75) {
-        return {
-          completed_at: Date.now(),
-          metrics: { ear, baseline }
-        };
-      }
-
+    if (!detection) {
       await new Promise((r) => setTimeout(r, 100));
+      continue;
     }
 
-    return null;
-  };
+    const left = eyeAspectRatio(detection.landmarks, [36, 37, 38, 39, 40, 41]);
+    const right = eyeAspectRatio(detection.landmarks, [42, 43, 44, 45, 46, 47]);
 
+    samples.push((left + right) / 2);
+
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  if (samples.length < 5) {
+    throw new Error("Face not detected properly.");
+  }
+
+  // Average EAR when eyes are open
+  const baseline =
+    samples.reduce((a, b) => a + b, 0) / samples.length;
+
+  console.log("Baseline EAR:", baseline);
+
+  // Wait for blink
+  for (let i = 0; i < 60; i++) {
+    const detection = await faceapi
+      .detectSingleFace(videoRef.current)
+      .withFaceLandmarks();
+
+    if (!detection) {
+      await new Promise((r) => setTimeout(r, 100));
+      continue;
+    }
+
+    const left = eyeAspectRatio(detection.landmarks, [36, 37, 38, 39, 40, 41]);
+    const right = eyeAspectRatio(detection.landmarks, [42, 43, 44, 45, 46, 47]);
+
+    const ear = (left + right) / 2;
+
+    console.log("EAR:", ear);
+
+    // Easier threshold
+    if (ear < baseline * 0.82) {
+      console.log("Blink detected");
+
+      return {
+        completed_at: Date.now(),
+        metrics: {
+          ear,
+          baseline
+        }
+      };
+    }
+
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  return null;
+};
   
 
   const runLivenessFlow = async () => {

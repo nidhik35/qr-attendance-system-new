@@ -255,7 +255,7 @@ export default async function handler(req, res) {
         status: "present",
         ip_address: clientIp,
         face_verified: true,
-        liveness_verified: true,
+       liveness_verified: !!liveness_token,
         latitude,
         longitude,
         date: new Date()
