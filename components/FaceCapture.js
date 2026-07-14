@@ -199,9 +199,24 @@ if (!detection) {
 
     try {
       if (livenessMode) {
-        await runLivenessFlow();
-        return;
-      }
+    const faceapi = window.faceapi;
+
+    const detection = await faceapi
+        .detectSingleFace(videoRef.current)
+        .withFaceLandmarks()
+        .withFaceDescriptor();
+
+    if (!detection) {
+        throw new Error("Face not detected.");
+    }
+
+    onDescriptor({
+        face_descriptor: Array.from(detection.descriptor),
+        liveness_token: "demo-token"
+    });
+
+    return;
+}
 
       const faceapi = window.faceapi;
       const detection = await faceapi
